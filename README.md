@@ -1,5 +1,5 @@
 # TimelinePage for Typecho
-
+因为我的主题作者懒得加入这个功能，于是我自己写了个
 在 Typecho 页面正文中写 `[timeline]...[/timeline]`，自动渲染成时间轴。
 
 ## 安装
