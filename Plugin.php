@@ -1,0 +1,585 @@
+<?php
+if (!defined('__TYPECHO_ROOT_DIR__')) {
+    exit;
+}
+
+/**
+ * 页面时间轴插件
+ *
+ * @package TimelinePage
+ * @author P3ter
+ * @version 1.0.0
+ * @link https://github.com/iP3ter/Typecho-TimelinePage
+ */
+class TimelinePage_Plugin implements Typecho_Plugin_Interface
+{
+    private static $styleInjected = false;
+    private static $scriptInjected = false;
+
+    /**
+     * 激活插件方法,如果激活失败,直接抛出异常
+     */
+    public static function activate()
+    {
+        Typecho_Plugin::factory('Widget_Abstract_Contents')->contentEx = array('TimelinePage_Plugin', 'filterContent');
+        Typecho_Plugin::factory('Widget_Abstract_Contents')->excerptEx = array('TimelinePage_Plugin', 'filterContent');
+        return _t('TimelinePage 插件已启用');
+    }
+
+    /**
+     * 禁用插件方法,如果禁用失败,直接抛出异常
+     */
+    public static function deactivate()
+    {
+        return _t('TimelinePage 插件已禁用');
+    }
+
+    /**
+     * 获取插件配置面板
+     */
+    public static function config(Typecho_Widget_Helper_Form $form)
+    {
+    }
+
+    /**
+     * 个人用户的配置面板
+     */
+    public static function personalConfig(Typecho_Widget_Helper_Form $form)
+    {
+    }
+
+    /**
+     * 过滤文章/页面内容，将 [timeline] 块转换为时间轴 HTML
+     */
+    public static function filterContent($content, $widget = null, $lastResult = null)
+    {
+        $text = empty($lastResult) ? $content : $lastResult;
+        if (strpos($text, '[timeline]') === false) {
+            return $text;
+        }
+
+        $pattern = '/\[timeline\](.*?)\[\/timeline\]/is';
+
+        return preg_replace_callback($pattern, function ($matches) {
+            return TimelinePage_Plugin::renderTimelineBlock($matches[1]);
+        }, $text);
+    }
+
+    /**
+     * 将时间轴块正文渲染为 HTML
+     */
+    private static function renderTimelineBlock($rawBlock)
+    {
+        $normalized = str_ireplace(array('<br>', '<br/>', '<br />'), "\n", $rawBlock);
+        $normalized = preg_replace('/<\/?p[^>]*>/i', '', $normalized);
+        $lines = preg_split('/\r\n|\r|\n/', trim($normalized));
+        $items = array();
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '' || strpos($line, '#') === 0) {
+                continue;
+            }
+
+            $parts = array_map('trim', explode('|', $line, 4));
+            $date = isset($parts[0]) ? $parts[0] : '';
+            $title = isset($parts[1]) ? $parts[1] : '';
+            $desc = isset($parts[2]) ? $parts[2] : '';
+            $imageField = isset($parts[3]) ? $parts[3] : '';
+
+            if ($date === '') {
+                continue;
+            }
+
+            if ($title === '') {
+                $title = $date;
+            }
+
+            $items[] = array(
+                'date' => htmlspecialchars($date, ENT_QUOTES, 'UTF-8'),
+                'title' => self::renderInlineMarkdown($title, false),
+                'desc' => self::renderInlineMarkdown($desc, true),
+                'images' => self::parseImageField($imageField)
+            );
+        }
+
+        if (empty($items)) {
+            return '';
+        }
+
+        $html = self::getStyleBlock();
+        $html .= self::getScriptBlock();
+        $html .= '<div class="tlp-timeline">';
+
+        foreach ($items as $item) {
+            $html .= '<article class="tlp-item">';
+            $html .= '<header class="tlp-head">';
+            $html .= '<span class="tlp-dot" aria-hidden="true"></span>';
+            $html .= '<time class="tlp-date">' . $item['date'] . '</time>';
+            $html .= '</header>';
+            $html .= '<div class="tlp-body">';
+            $html .= '<div class="tlp-card">';
+            $html .= '<h4 class="tlp-title">' . $item['title'] . '</h4>';
+            if ($item['desc'] !== '') {
+                $html .= '<p class="tlp-desc">' . $item['desc'] . '</p>';
+            }
+            if (!empty($item['images'])) {
+                $html .= '<div class="tlp-gallery">';
+                foreach ($item['images'] as $image) {
+                    $html .= '<a class="tlp-image-link tlp-lightbox-trigger" data-src="' . $image['url'] . '" href="' . $image['url'] . '" target="_blank" rel="noopener noreferrer">';
+                    $html .= '<img class="tlp-image" src="' . $image['url'] . '" alt="' . $image['alt'] . '" loading="lazy" referrerpolicy="no-referrer" />';
+                    $html .= '</a>';
+                }
+                $html .= '</div>';
+            }
+            $html .= '</div>';
+            $html .= '</div>';
+            $html .= '</article>';
+        }
+
+        $html .= '</div>';
+        return $html;
+    }
+
+    /**
+     * 解析图片字段（可选第 4 段）
+     * 支持使用英文逗号分隔多图：
+     * https://a.com/1.jpg, https://b.com/2.png
+     */
+    private static function parseImageField($imageField)
+    {
+        $imageField = trim((string)$imageField);
+        if ($imageField === '') {
+            return array();
+        }
+
+        $rawItems = preg_split('/\s*,\s*/', $imageField);
+        $images = array();
+
+        foreach ($rawItems as $url) {
+            $url = trim($url);
+            if (!self::isSafeHttpUrl($url)) {
+                continue;
+            }
+
+            $path = (string)parse_url($url, PHP_URL_PATH);
+            $filename = $path === '' ? 'timeline-image' : basename($path);
+
+            $images[] = array(
+                'url' => htmlspecialchars($url, ENT_QUOTES, 'UTF-8'),
+                'alt' => htmlspecialchars($filename, ENT_QUOTES, 'UTF-8')
+            );
+        }
+
+        return $images;
+    }
+
+    /**
+     * 解析安全的行内 Markdown
+     * 支持: **bold** *italic* ~~del~~ `code` ==mark== [text](https://...)
+     * 支持: ![alt](https://...) / <img src="https://...">
+     * 兼容: <a href="https://...">text</a>
+     */
+    private static function renderInlineMarkdown($text, $allowBreak = false)
+    {
+        $text = trim((string)$text);
+        if ($text === '') {
+            return '';
+        }
+
+        $placeholders = array();
+        $text = preg_replace_callback('/<img\s+[^>]*src\s*=\s*(["\'])(.*?)\1[^>]*>/is', function ($m) use (&$placeholders) {
+            $tag = $m[0];
+            $url = html_entity_decode(trim($m[2]), ENT_QUOTES, 'UTF-8');
+            if (!self::isSafeHttpUrl($url)) {
+                return $m[0];
+            }
+
+            $alt = '';
+            if (preg_match('/alt\s*=\s*(["\'])(.*?)\1/is', $tag, $altMatch)) {
+                $alt = trim((string)$altMatch[2]);
+            }
+
+            $key = '@@TLPIMG' . count($placeholders) . '@@';
+            $placeholders[$key] = self::buildImageTag($url, $alt);
+            return $key;
+        }, $text);
+
+        $text = preg_replace_callback('/!\[([^\]]*)\]\((https?:\/\/[^\s\)]+)\)/i', function ($m) use (&$placeholders) {
+            $url = trim($m[2]);
+            if (!self::isSafeHttpUrl($url)) {
+                return $m[0];
+            }
+
+            $alt = trim($m[1]);
+            $key = '@@TLPIMG' . count($placeholders) . '@@';
+            $placeholders[$key] = self::buildImageTag($url, $alt);
+            return $key;
+        }, $text);
+
+        $text = preg_replace_callback('/<a\s+[^>]*href\s*=\s*(["\'])(.*?)\1[^>]*>(.*?)<\/a>/is', function ($m) use (&$placeholders) {
+            $url = html_entity_decode(trim($m[2]), ENT_QUOTES, 'UTF-8');
+            if (!self::isSafeHttpUrl($url)) {
+                return $m[0];
+            }
+
+            $labelRaw = trim(strip_tags($m[3]));
+            $label = $labelRaw === '' ? $url : $labelRaw;
+
+            $key = '@@TLPLINK' . count($placeholders) . '@@';
+            $placeholders[$key] = '<a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" target="_blank" rel="noopener noreferrer">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</a>';
+            return $key;
+        }, $text);
+
+        $text = preg_replace_callback('/(?<!\!)\[(.+?)\]\((https?:\/\/[^\s\)]+)\)/i', function ($m) use (&$placeholders) {
+            $url = trim($m[2]);
+            if (!self::isSafeHttpUrl($url)) {
+                return $m[0];
+            }
+
+            $key = '@@TLPLINK' . count($placeholders) . '@@';
+            $label = htmlspecialchars($m[1], ENT_QUOTES, 'UTF-8');
+            $href = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+            $placeholders[$key] = '<a href="' . $href . '" target="_blank" rel="noopener noreferrer">' . $label . '</a>';
+            return $key;
+        }, $text);
+
+        $html = htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+
+        $rules = array(
+            '/\*\*([^\*\n]+)\*\*/' => '<strong>$1</strong>',
+            '/\*([^\*\n]+)\*/' => '<em>$1</em>',
+            '/~~([^~\n]+)~~/' => '<del>$1</del>',
+            '/==([^=\n]+)==/' => '<mark>$1</mark>',
+            '/`([^`\n]+)`/' => '<code>$1</code>'
+        );
+
+        foreach ($rules as $pattern => $replacement) {
+            $html = preg_replace($pattern, $replacement, $html);
+        }
+
+        if (!empty($placeholders)) {
+            $html = str_replace(array_keys($placeholders), array_values($placeholders), $html);
+        }
+
+        if ($allowBreak) {
+            $html = nl2br($html);
+        }
+
+        return $html;
+    }
+
+    private static function buildImageTag($url, $alt = '')
+    {
+        $safeUrl = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+        $safeAlt = htmlspecialchars($alt, ENT_QUOTES, 'UTF-8');
+        return '<img class="tlp-inline-image tlp-lightbox-trigger" data-src="' . $safeUrl . '" src="' . $safeUrl . '" alt="' . $safeAlt . '" loading="lazy" referrerpolicy="no-referrer" />';
+    }
+
+    private static function isSafeHttpUrl($url)
+    {
+        $validUrl = filter_var($url, FILTER_VALIDATE_URL);
+        if (!$validUrl) {
+            return false;
+        }
+
+        $scheme = strtolower((string)parse_url($validUrl, PHP_URL_SCHEME));
+        return in_array($scheme, array('http', 'https'), true);
+    }
+
+    /**
+     * 输出图片预览脚本（每次渲染都可安全重复插入）
+     */
+    private static function getScriptBlock()
+    {
+        if (self::$scriptInjected) {
+            return '';
+        }
+        self::$scriptInjected = true;
+
+        return '<div class="tlp-lightbox" id="tlp-lightbox" aria-hidden="true">
+            <button type="button" class="tlp-lightbox-close" aria-label="Close">&times;</button>
+            <img class="tlp-lightbox-image" src="" alt="" />
+        </div>
+        <script>
+        (function () {
+            if (window.__tlpLightboxReady) {
+                return;
+            }
+            window.__tlpLightboxReady = true;
+
+            var lightbox = document.getElementById("tlp-lightbox");
+            if (!lightbox) {
+                return;
+            }
+            var imageEl = lightbox.querySelector(".tlp-lightbox-image");
+            var closeEl = lightbox.querySelector(".tlp-lightbox-close");
+
+            var open = function (src, alt) {
+                if (!src || !imageEl) {
+                    return;
+                }
+                imageEl.src = src;
+                imageEl.alt = alt || "";
+                lightbox.classList.add("is-open");
+                lightbox.setAttribute("aria-hidden", "false");
+                document.body.classList.add("tlp-lightbox-open");
+            };
+
+            var close = function () {
+                lightbox.classList.remove("is-open");
+                lightbox.setAttribute("aria-hidden", "true");
+                document.body.classList.remove("tlp-lightbox-open");
+                if (imageEl) {
+                    imageEl.src = "";
+                    imageEl.alt = "";
+                }
+            };
+
+            document.addEventListener("click", function (event) {
+                var trigger = event.target.closest(".tlp-lightbox-trigger");
+                if (!trigger) {
+                    return;
+                }
+
+                var source = trigger.getAttribute("data-src");
+                var altText = trigger.getAttribute("alt") || "";
+                if (!source && trigger.tagName === "A") {
+                    source = trigger.getAttribute("href");
+                }
+                if (!source) {
+                    var innerImage = trigger.querySelector("img");
+                    if (innerImage) {
+                        source = innerImage.getAttribute("src");
+                        altText = innerImage.getAttribute("alt") || altText;
+                    }
+                }
+                if (!source) {
+                    return;
+                }
+
+                event.preventDefault();
+                open(source, altText);
+            });
+
+            if (closeEl) {
+                closeEl.addEventListener("click", close);
+            }
+
+            lightbox.addEventListener("click", function (event) {
+                if (event.target === lightbox) {
+                    close();
+                }
+            });
+
+            document.addEventListener("keydown", function (event) {
+                if (event.key === "Escape" && lightbox.classList.contains("is-open")) {
+                    close();
+                }
+            });
+        })();
+        </script>';
+    }
+
+    /**
+     * 输出内联样式（每次渲染都可安全重复插入）
+     */
+    private static function getStyleBlock()
+    {
+        if (self::$styleInjected) {
+            return '';
+        }
+        self::$styleInjected = true;
+
+        return '<style>
+        .tlp-timeline{
+            --tlp-accent:#10bfa8;
+            --tlp-text:#2d353f;
+            --tlp-muted:#556070;
+            --tlp-card:#f2f2f3;
+            --tlp-font:"Avenir Next","Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+            margin:12px 0;
+            display:grid;
+            gap:16px;
+            font-family:var(--tlp-font);
+            color:var(--tlp-text);
+        }
+        .tlp-item{
+            position:relative;
+            padding-left:2px;
+        }
+        .tlp-head{
+            display:flex;
+            align-items:center;
+            gap:12px;
+            margin:0 0 8px;
+        }
+        .tlp-dot{
+            width:10px;
+            height:10px;
+            flex:0 0 auto;
+            border-radius:50%;
+            border:2px solid var(--tlp-accent);
+            background:#fff;
+            box-sizing:border-box;
+        }
+        .tlp-date{
+            display:block;
+            font-size:32px;
+            line-height:1.2;
+            letter-spacing:.4px;
+            color:var(--tlp-accent);
+            font-weight:500;
+            white-space:normal;
+            word-break:break-word;
+        }
+        .tlp-body{
+            position:relative;
+            margin-left:6px;
+            padding-left:34px;
+        }
+        .tlp-body:before{
+            content:"";
+            position:absolute;
+            left:3px;
+            top:0;
+            bottom:0;
+            width:2px;
+            background:var(--tlp-accent);
+            opacity:.9;
+            border-radius:2px;
+        }
+        .tlp-card{
+            background:var(--tlp-card);
+            border-radius:32px;
+            padding:14px 24px;
+        }
+        .tlp-title{
+            margin:0;
+            font-size:18px;
+            line-height:1.62;
+            font-weight:500;
+            letter-spacing:.2px;
+            color:var(--tlp-text);
+        }
+        .tlp-desc{
+            margin:6px 0 0;
+            font-size:15px;
+            line-height:1.72;
+            font-weight:400;
+            color:var(--tlp-muted);
+        }
+        .tlp-card mark{
+            background:#f6edbf;
+            color:inherit;
+            padding:0 .18em;
+            border-radius:4px;
+        }
+        .tlp-card a{
+            color:var(--tlp-accent);
+            text-decoration:none;
+            font-weight:600;
+        }
+        .tlp-card code{
+            font-family:"Consolas","SFMono-Regular","Menlo","Monaco",monospace;
+            font-size:.92em;
+            padding:.08em .32em;
+            border-radius:6px;
+            background:#e7ebf0;
+            color:#344253;
+        }
+        .tlp-inline-image{
+            display:block;
+            width:min(100%,420px);
+            max-width:100%;
+            margin-top:8px;
+            border-radius:12px;
+            background:#e8ecef;
+            object-fit:cover;
+            cursor:zoom-in;
+        }
+        .tlp-card strong{font-weight:700}
+        .tlp-card em{font-style:italic}
+        .tlp-card del{opacity:.78}
+        .tlp-gallery{
+            margin-top:10px;
+            display:grid;
+            grid-template-columns:repeat(auto-fill,minmax(120px,1fr));
+            gap:10px;
+        }
+        .tlp-image-link{
+            display:block;
+            border-radius:12px;
+            overflow:hidden;
+            background:#e8ecef;
+            cursor:zoom-in;
+        }
+        .tlp-image{
+            display:block;
+            width:100%;
+            aspect-ratio:4/3;
+            object-fit:cover;
+            transition:transform .22s ease;
+        }
+        .tlp-image-link:hover .tlp-image{
+            transform:scale(1.04);
+        }
+        .tlp-lightbox-open{
+            overflow:hidden;
+        }
+        .tlp-lightbox{
+            position:fixed;
+            inset:0;
+            z-index:99999;
+            background:rgba(12,18,24,.82);
+            display:none;
+            align-items:center;
+            justify-content:center;
+            padding:24px;
+        }
+        .tlp-lightbox.is-open{
+            display:flex;
+        }
+        .tlp-lightbox-image{
+            max-width:min(96vw,1200px);
+            max-height:88vh;
+            width:auto;
+            height:auto;
+            border-radius:12px;
+            box-shadow:0 20px 45px rgba(0,0,0,.32);
+            background:#fff;
+            object-fit:contain;
+        }
+        .tlp-lightbox-close{
+            position:absolute;
+            top:14px;
+            right:16px;
+            width:40px;
+            height:40px;
+            border:none;
+            border-radius:999px;
+            background:rgba(255,255,255,.18);
+            color:#fff;
+            font-size:28px;
+            line-height:1;
+            cursor:pointer;
+        }
+        .tlp-lightbox-close:hover{
+            background:rgba(255,255,255,.28);
+        }
+        @media (max-width:640px){
+            .tlp-timeline{gap:12px}
+            .tlp-head{gap:9px;margin-bottom:6px}
+            .tlp-dot{width:9px;height:9px}
+            .tlp-date{font-size:21px;line-height:1.3}
+            .tlp-body{padding-left:22px}
+            .tlp-card{padding:11px 14px;border-radius:18px}
+            .tlp-title{font-size:15px;line-height:1.5}
+            .tlp-desc{font-size:13px;line-height:1.62}
+            .tlp-gallery{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+            .tlp-lightbox{padding:12px}
+            .tlp-lightbox-close{top:10px;right:10px}
+        }
+        </style>';
+    }
+}
