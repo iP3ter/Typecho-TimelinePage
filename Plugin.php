@@ -692,13 +692,14 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
             display:inline-flex;
             flex-direction:column;
             justify-content:center;
-            align-items:center;
+            align-items:stretch;
             vertical-align:middle;
             max-width:100%;
             text-align:center;
         }
         .tlp-desc{
             margin:0;
+            width:100%;
             font-size:15px;
             line-height:1.72;
             font-weight:600;
