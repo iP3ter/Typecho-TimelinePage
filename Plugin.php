@@ -8,7 +8,7 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
  *
  * @package TimelinePage
  * @author P3ter
- * @version 1.0.0
+ * @version 1.0.1
  * @link https://github.com/iP3ter/Typecho-TimelinePage
  */
 class TimelinePage_Plugin implements Typecho_Plugin_Interface
@@ -21,8 +21,17 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
      */
     public static function activate()
     {
-        Typecho_Plugin::factory('Widget_Abstract_Contents')->contentEx = array('TimelinePage_Plugin', 'filterContent');
-        Typecho_Plugin::factory('Widget_Abstract_Contents')->excerptEx = array('TimelinePage_Plugin', 'filterContent');
+        $factoryName = 'Widget_Abstract_Contents';
+        try {
+            $themeName = strtolower((string)Typecho_Widget::widget('Widget_Options')->theme);
+            if (strpos($themeName, 'mirages') !== false) {
+                $factoryName = 'Mirages_Plugin';
+            }
+        } catch (Exception $e) {
+        } catch (Error $e) {
+        }
+
+        self::registerContentFilterHooks($factoryName);
         return _t('TimelinePage 插件已启用');
     }
 
@@ -39,23 +48,37 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
      */
     public static function config(Typecho_Widget_Helper_Form $form)
     {
-        $accentColor = new Typecho_Widget_Helper_Form_Element_Text(
-            'accentColor',
-            null,
-            '',
-            _t('自定义日期颜色（默认模式）'),
-            _t('留空则自动跟随主题主色；格式仅支持 Hex，如 #10bfa8 或 10bfa8。')
-        );
-        $form->addInput($accentColor);
+        try {
+            $textClass = class_exists('Typecho_Widget_Helper_Form_Element_Text')
+                ? 'Typecho_Widget_Helper_Form_Element_Text'
+                : (class_exists('\\Typecho\\Widget\\Helper\\Form\\Element\\Text') ? '\\Typecho\\Widget\\Helper\\Form\\Element\\Text' : '');
 
-        $accentColorDark = new Typecho_Widget_Helper_Form_Element_Text(
-            'accentColorDark',
-            null,
-            '',
-            _t('自定义日期颜色（夜间模式）'),
-            _t('可选。留空则沿用默认模式颜色或主题主色；格式仅支持 Hex。')
-        );
-        $form->addInput($accentColorDark);
+            if ($textClass === '') {
+                return;
+            }
+
+            $accentColor = new $textClass(
+                'accentColor',
+                array(),
+                '',
+                _t('自定义日期颜色（默认模式）'),
+                _t('留空则自动跟随主题主色；格式仅支持 Hex，如 #10bfa8 或 10bfa8。')
+            );
+            $form->addInput($accentColor);
+
+            $accentColorDark = new $textClass(
+                'accentColorDark',
+                array(),
+                '',
+                _t('自定义日期颜色（夜间模式）'),
+                _t('可选。留空则沿用默认模式颜色或主题主色；格式仅支持 Hex。')
+            );
+            $form->addInput($accentColorDark);
+        } catch (Exception $e) {
+            return;
+        } catch (Error $e) {
+            return;
+        }
     }
 
     /**
@@ -66,12 +89,28 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
     }
 
     /**
+     * 注册内容过滤钩子，兼容默认 Typecho 与 Mirages 主题插件代理
+     */
+    private static function registerContentFilterHooks($factoryName)
+    {
+        // 内容与摘要都挂钩，兼容不同主题的调用点
+        Typecho_Plugin::factory($factoryName)->contentEx = array('TimelinePage_Plugin', 'filterContent');
+        Typecho_Plugin::factory($factoryName)->excerptEx = array('TimelinePage_Plugin', 'filterContent');
+        Typecho_Plugin::factory($factoryName)->content = array('TimelinePage_Plugin', 'filterContent');
+        Typecho_Plugin::factory($factoryName)->excerpt = array('TimelinePage_Plugin', 'filterContent');
+    }
+
+    /**
      * 过滤文章/页面内容，将 [timeline] 块转换为时间轴 HTML
      */
     public static function filterContent($content, $widget = null, $lastResult = null)
     {
-        $text = empty($lastResult) ? $content : $lastResult;
-        if (strpos($text, '[timeline]') === false) {
+        $text = ($lastResult !== null && $lastResult !== '') ? $lastResult : $content;
+        if (!is_string($text)) {
+            return $text;
+        }
+
+        if (stripos($text, '[timeline') === false) {
             return $text;
         }
 
@@ -597,7 +636,7 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
             --tlp-font:"Avenir Next","Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
             margin:12px 0;
             display:grid;
-            gap:16px;
+            gap:12px;
             font-family:var(--tlp-font);
             color:var(--tlp-text);
         }
@@ -609,7 +648,7 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
             display:flex;
             align-items:center;
             gap:12px;
-            margin:0 0 8px;
+            margin:0 0 5px;
         }
         .tlp-dot{
             width:10px;
@@ -633,14 +672,14 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
         .tlp-body{
             position:relative;
             margin-left:6px;
-            padding-left:34px;
+            padding-left:28px;
         }
         .tlp-body:before{
             content:"";
             position:absolute;
-            left:3px;
-            top:0;
-            bottom:0;
+            left:2px;
+            top:1px;
+            bottom:9px;
             width:2px;
             background:var(--tlp-accent);
             opacity:.9;
@@ -648,15 +687,23 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
         }
         .tlp-card{
             background:var(--tlp-card);
-            border-radius:32px;
-            padding:14px 24px;
+            border-radius:28px;
+            padding:13px 22px;
+            display:inline-flex;
+            flex-direction:column;
+            justify-content:center;
+            align-items:center;
+            vertical-align:middle;
+            max-width:100%;
+            text-align:center;
         }
         .tlp-desc{
             margin:0;
             font-size:15px;
             line-height:1.72;
-            font-weight:500;
-            color:var(--tlp-muted);
+            font-weight:600;
+            color:var(--tlp-text);
+            text-align:center;
         }
         .tlp-card mark{
             background:#f6edbf;
@@ -762,12 +809,13 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
             }
         }
         @media (max-width:640px){
-            .tlp-timeline{gap:12px}
-            .tlp-head{gap:9px;margin-bottom:6px}
+            .tlp-timeline{gap:9px}
+            .tlp-head{gap:9px;margin-bottom:4px}
             .tlp-dot{width:9px;height:9px}
             .tlp-date{font-size:21px;line-height:1.3}
-            .tlp-body{padding-left:22px}
-            .tlp-card{padding:11px 14px;border-radius:18px}
+            .tlp-body{padding-left:20px}
+            .tlp-body:before{bottom:6px}
+            .tlp-card{padding:10px 12px;border-radius:16px}
             .tlp-desc{font-size:13px;line-height:1.62}
             .tlp-gallery{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
             .tlp-lightbox{padding:12px}

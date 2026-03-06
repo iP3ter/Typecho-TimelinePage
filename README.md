@@ -1,4 +1,5 @@
 # TimelinePage for Typecho
+因为我的主题作者比较懒，懒得加，所以我自己写了个，同时更好的适配[Mirages](https://get233.com/archives/mirages-intro.html)这个主题
 
 在 Typecho 文章或页面中写 `[timeline]...[/timeline]`，可自动渲染为时间轴样式。
 
