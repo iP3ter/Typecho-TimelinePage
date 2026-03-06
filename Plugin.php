@@ -39,6 +39,23 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
      */
     public static function config(Typecho_Widget_Helper_Form $form)
     {
+        $accentColor = new Typecho_Widget_Helper_Form_Element_Text(
+            'accentColor',
+            null,
+            '',
+            _t('自定义日期颜色（默认模式）'),
+            _t('留空则自动跟随主题主色；格式仅支持 Hex，如 #10bfa8 或 10bfa8。')
+        );
+        $form->addInput($accentColor);
+
+        $accentColorDark = new Typecho_Widget_Helper_Form_Element_Text(
+            'accentColorDark',
+            null,
+            '',
+            _t('自定义日期颜色（夜间模式）'),
+            _t('可选。留空则沿用默认模式颜色或主题主色；格式仅支持 Hex。')
+        );
+        $form->addInput($accentColorDark);
     }
 
     /**
@@ -83,7 +100,6 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
 
             $parts = array_map('trim', explode('|', $line, 4));
             $date = isset($parts[0]) ? $parts[0] : '';
-            $title = isset($parts[1]) ? $parts[1] : '';
             $desc = isset($parts[2]) ? $parts[2] : '';
             $imageField = isset($parts[3]) ? $parts[3] : '';
 
@@ -91,13 +107,12 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
                 continue;
             }
 
-            if ($title === '') {
-                $title = $date;
+            if ($desc === '' && isset($parts[1])) {
+                $desc = (string)$parts[1];
             }
 
             $items[] = array(
                 'date' => htmlspecialchars($date, ENT_QUOTES, 'UTF-8'),
-                'title' => self::renderInlineMarkdown($title, false),
                 'desc' => self::renderInlineMarkdown($desc, true),
                 'images' => self::parseImageField($imageField)
             );
@@ -112,28 +127,33 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
         $html .= '<div class="tlp-timeline">';
 
         foreach ($items as $item) {
+            $hasBody = ($item['desc'] !== '' || !empty($item['images']));
+
             $html .= '<article class="tlp-item">';
             $html .= '<header class="tlp-head">';
             $html .= '<span class="tlp-dot" aria-hidden="true"></span>';
             $html .= '<time class="tlp-date">' . $item['date'] . '</time>';
             $html .= '</header>';
-            $html .= '<div class="tlp-body">';
-            $html .= '<div class="tlp-card">';
-            $html .= '<h4 class="tlp-title">' . $item['title'] . '</h4>';
-            if ($item['desc'] !== '') {
-                $html .= '<p class="tlp-desc">' . $item['desc'] . '</p>';
-            }
-            if (!empty($item['images'])) {
-                $html .= '<div class="tlp-gallery">';
-                foreach ($item['images'] as $image) {
-                    $html .= '<a class="tlp-image-link tlp-lightbox-trigger" data-src="' . $image['url'] . '" href="' . $image['url'] . '" target="_blank" rel="noopener noreferrer">';
-                    $html .= '<img class="tlp-image" src="' . $image['url'] . '" alt="' . $image['alt'] . '" loading="lazy" referrerpolicy="no-referrer" />';
-                    $html .= '</a>';
+
+            if ($hasBody) {
+                $html .= '<div class="tlp-body">';
+                $html .= '<div class="tlp-card">';
+                if ($item['desc'] !== '') {
+                    $html .= '<p class="tlp-desc">' . $item['desc'] . '</p>';
+                }
+                if (!empty($item['images'])) {
+                    $html .= '<div class="tlp-gallery">';
+                    foreach ($item['images'] as $image) {
+                        $html .= '<a class="tlp-image-link tlp-lightbox-trigger" data-src="' . $image['url'] . '" href="' . $image['url'] . '" target="_blank" rel="noopener noreferrer">';
+                        $html .= '<img class="tlp-image" src="' . $image['url'] . '" alt="' . $image['alt'] . '" loading="lazy" referrerpolicy="no-referrer" />';
+                        $html .= '</a>';
+                    }
+                    $html .= '</div>';
                 }
                 $html .= '</div>';
+                $html .= '</div>';
             }
-            $html .= '</div>';
-            $html .= '</div>';
+
             $html .= '</article>';
         }
 
@@ -276,6 +296,30 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
         return '<img class="tlp-inline-image tlp-lightbox-trigger" data-src="' . $safeUrl . '" src="' . $safeUrl . '" alt="' . $safeAlt . '" loading="lazy" referrerpolicy="no-referrer" />';
     }
 
+    private static function getPluginOptionValue($name)
+    {
+        $pluginOptions = Typecho_Widget::widget('Widget_Options')->plugin('TimelinePage');
+        if (!is_object($pluginOptions) || !isset($pluginOptions->{$name})) {
+            return '';
+        }
+
+        return trim((string)$pluginOptions->{$name});
+    }
+
+    private static function normalizeHexColor($color)
+    {
+        $color = trim((string)$color);
+        if ($color === '') {
+            return '';
+        }
+
+        if (preg_match('/^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/', $color, $matches) !== 1) {
+            return '';
+        }
+
+        return '#' . strtolower($matches[1]);
+    }
+
     private static function isSafeHttpUrl($url)
     {
         $validUrl = filter_var($url, FILTER_VALIDATE_URL);
@@ -314,6 +358,126 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
             }
             var imageEl = lightbox.querySelector(".tlp-lightbox-image");
             var closeEl = lightbox.querySelector(".tlp-lightbox-close");
+            var accentObserver = null;
+
+            var isValidColor = function (value) {
+                if (!value) {
+                    return false;
+                }
+                var tester = document.createElement("span");
+                tester.style.color = "";
+                tester.style.color = value;
+                return tester.style.color !== "";
+            };
+
+            var readFirstColorVariable = function (styleMap, keys) {
+                if (!styleMap || !keys || !keys.length) {
+                    return "";
+                }
+                for (var i = 0; i < keys.length; i++) {
+                    var color = (styleMap.getPropertyValue(keys[i]) || "").trim();
+                    if (isValidColor(color)) {
+                        return color;
+                    }
+                }
+                return "";
+            };
+
+            var resolveThemeAccent = function () {
+                var rootStyle = window.getComputedStyle(document.documentElement);
+                var candidates = [
+                    "--theme-color",
+                    "--theme-primary",
+                    "--theme-primary-color",
+                    "--primary-color",
+                    "--accent-color",
+                    "--main-color",
+                    "--color-primary",
+                    "--heo-main",
+                    "--joe-theme"
+                ];
+
+                var color = readFirstColorVariable(rootStyle, candidates);
+                if (color) {
+                    return color;
+                }
+
+                var bodyStyle = window.getComputedStyle(document.body || document.documentElement);
+                color = readFirstColorVariable(bodyStyle, candidates);
+                if (color) {
+                    return color;
+                }
+
+                var link = document.querySelector("main a, article a, .entry-content a, .post-content a, a");
+                if (link) {
+                    color = (window.getComputedStyle(link).color || "").trim();
+                    if (isValidColor(color)) {
+                        return color;
+                    }
+                }
+
+                var themeMeta = document.querySelector("meta[name=\'theme-color\']");
+                if (themeMeta) {
+                    color = (themeMeta.getAttribute("content") || "").trim();
+                    if (isValidColor(color)) {
+                        return color;
+                    }
+                }
+
+                return "";
+            };
+
+            var isDarkTheme = function () {
+                var root = document.documentElement;
+                var body = document.body || document.documentElement;
+                var marker = (
+                    (root.getAttribute("data-theme") || "") + " " +
+                    (root.className || "") + " " +
+                    (body.getAttribute("data-theme") || "") + " " +
+                    (body.className || "")
+                ).toLowerCase();
+
+                if (marker.indexOf("dark") !== -1) {
+                    return true;
+                }
+
+                if (window.matchMedia) {
+                    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+                }
+
+                return false;
+            };
+
+            var applyTimelineAccent = function () {
+                var accent = resolveThemeAccent();
+                var darkMode = isDarkTheme();
+
+                var timelines = document.querySelectorAll(".tlp-timeline");
+                for (var i = 0; i < timelines.length; i++) {
+                    var timeline = timelines[i];
+                    var timelineStyle = window.getComputedStyle(timeline);
+                    var customAccent = (timelineStyle.getPropertyValue("--tlp-accent-user") || "").trim();
+                    var customAccentDark = (timelineStyle.getPropertyValue("--tlp-accent-user-dark") || "").trim();
+
+                    if (isValidColor(customAccent) || isValidColor(customAccentDark)) {
+                        var lockedAccent = customAccent;
+                        if (darkMode && isValidColor(customAccentDark)) {
+                            lockedAccent = customAccentDark;
+                        }
+                        if (!isValidColor(lockedAccent) && isValidColor(customAccent)) {
+                            lockedAccent = customAccent;
+                        }
+                        if (isValidColor(lockedAccent)) {
+                            timeline.style.setProperty("--tlp-accent", lockedAccent);
+                            continue;
+                        }
+                    }
+
+                    if (accent) {
+                        timeline.style.setProperty("--tlp-accent", accent);
+                    }
+                }
+            };
 
             var open = function (src, alt) {
                 if (!src || !imageEl) {
@@ -377,6 +541,28 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
                     close();
                 }
             });
+
+            applyTimelineAccent();
+            window.setTimeout(applyTimelineAccent, 60);
+
+            if (window.matchMedia) {
+                var media = window.matchMedia("(prefers-color-scheme: dark)");
+                if (media.addEventListener) {
+                    media.addEventListener("change", applyTimelineAccent);
+                } else if (media.addListener) {
+                    media.addListener(applyTimelineAccent);
+                }
+            }
+
+            if (window.MutationObserver) {
+                accentObserver = new MutationObserver(function () {
+                    applyTimelineAccent();
+                });
+                accentObserver.observe(document.documentElement, {
+                    attributes: true,
+                    attributeFilter: ["class", "style", "data-theme", "theme"]
+                });
+            }
         })();
         </script>';
     }
@@ -391,9 +577,20 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
         }
         self::$styleInjected = true;
 
+        $accentColor = self::normalizeHexColor(self::getPluginOptionValue('accentColor'));
+        $accentColorDark = self::normalizeHexColor(self::getPluginOptionValue('accentColorDark'));
+        $customAccentCss = '';
+        if ($accentColor !== '') {
+            $customAccentCss .= '--tlp-accent-user:' . $accentColor . ';';
+        }
+        if ($accentColorDark !== '') {
+            $customAccentCss .= '--tlp-accent-user-dark:' . $accentColorDark . ';';
+        }
+
         return '<style>
         .tlp-timeline{
-            --tlp-accent:#10bfa8;
+            ' . $customAccentCss . '
+            --tlp-accent:var(--tlp-accent-user,var(--timeline-accent,var(--theme-color,var(--theme-primary,var(--theme-primary-color,var(--primary-color,var(--accent-color,#10bfa8)))))));
             --tlp-text:#2d353f;
             --tlp-muted:#556070;
             --tlp-card:#f2f2f3;
@@ -454,19 +651,11 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
             border-radius:32px;
             padding:14px 24px;
         }
-        .tlp-title{
-            margin:0;
-            font-size:18px;
-            line-height:1.62;
-            font-weight:500;
-            letter-spacing:.2px;
-            color:var(--tlp-text);
-        }
         .tlp-desc{
-            margin:6px 0 0;
+            margin:0;
             font-size:15px;
             line-height:1.72;
-            font-weight:400;
+            font-weight:500;
             color:var(--tlp-muted);
         }
         .tlp-card mark{
@@ -567,6 +756,11 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
         .tlp-lightbox-close:hover{
             background:rgba(255,255,255,.28);
         }
+        @media (prefers-color-scheme:dark){
+            .tlp-timeline{
+                --tlp-accent:var(--tlp-accent-user-dark,var(--tlp-accent-user,var(--timeline-accent,var(--theme-color,var(--theme-primary,var(--theme-primary-color,var(--primary-color,var(--accent-color,#10bfa8))))))));
+            }
+        }
         @media (max-width:640px){
             .tlp-timeline{gap:12px}
             .tlp-head{gap:9px;margin-bottom:6px}
@@ -574,7 +768,6 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
             .tlp-date{font-size:21px;line-height:1.3}
             .tlp-body{padding-left:22px}
             .tlp-card{padding:11px 14px;border-radius:18px}
-            .tlp-title{font-size:15px;line-height:1.5}
             .tlp-desc{font-size:13px;line-height:1.62}
             .tlp-gallery{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
             .tlp-lightbox{padding:12px}
