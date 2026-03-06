@@ -29,6 +29,8 @@
 [/timeline]
 ```
 
+<img width="927" height="627" alt="image" src="https://github.com/user-attachments/assets/41a49f84-e297-4cfd-9a30-397308190655" />
+
 ## 规则
 
 - 每一行一条记录，格式：`日期|标题|描述|图片URL`
