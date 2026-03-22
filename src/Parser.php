@@ -31,9 +31,9 @@ class TimelinePage_Parser
                 continue;
             }
 
-            $parts = explode('|', $line, 3);
-            $parts = array_map('trim', $parts);
-            if (count($parts) < 2) {
+            // New syntax only: date|content (supports markdown, including ![]()).
+            $parts = preg_split('/\s*[|｜]\s*/u', $line, 2);
+            if (!is_array($parts) || count($parts) < 2) {
                 continue;
             }
 
@@ -42,7 +42,7 @@ class TimelinePage_Parser
                 continue;
             }
 
-            $descRaw = isset($parts[1]) ? $parts[1] : '';
+            $descRaw = trim((string)$parts[1]);
             if ($descRaw === '') {
                 continue;
             }
@@ -52,15 +52,12 @@ class TimelinePage_Parser
                 continue;
             }
 
-            $images = TimelinePage_Sanitizer::parseImageList(isset($parts[2]) ? $parts[2] : '');
-
             $items[] = array(
                 'year' => $dateInfo['year'],
                 'date' => $dateInfo['date'],
                 'month_day' => $dateInfo['month_day'],
                 'timestamp' => $dateInfo['timestamp'],
-                'content_html' => $contentHtml,
-                'images' => $images
+                'content_html' => $contentHtml
             );
         }
 
@@ -116,7 +113,7 @@ class TimelinePage_Parser
     private function parseDate($rawDate)
     {
         $rawDate = trim((string)$rawDate);
-        if (!preg_match('/^(\d{4})[-\/\.](\d{1,2})[-\/\.](\d{1,2})$/', $rawDate, $match)) {
+        if (!preg_match('/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})$/', $rawDate, $match)) {
             return null;
         }
 

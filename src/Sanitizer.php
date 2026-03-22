@@ -14,23 +14,34 @@ class TimelinePage_Sanitizer
     public static function sanitizeUrl($url)
     {
         $url = trim(html_entity_decode((string)$url, ENT_QUOTES, 'UTF-8'));
-        if ($url === '' || preg_match('/[\x00-\x1F\x7F]/', $url)) {
+        if ($url === '' || preg_match('/[\x00-\x1F\x7F]/', $url) || preg_match('/\s/u', $url)) {
             return '';
         }
 
-        if (!filter_var($url, FILTER_VALIDATE_URL)) {
-            return '';
+        // Protocol-relative URL.
+        if (strpos($url, '//') === 0) {
+            $parts = parse_url('https:' . $url);
+            if (!is_array($parts) || empty($parts['host'])) {
+                return '';
+            }
+            return htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
         }
 
+        // Relative URL.
+        if (preg_match('#^(?:/|\.{1,2}/)[^\s]+$#u', $url)) {
+            return htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+        }
+
+        // Absolute URL.
         $parts = parse_url($url);
-        if (!is_array($parts) || empty($parts['scheme'])) {
+        if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
             return '';
         }
-
-        $scheme = strtolower($parts['scheme']);
+        $scheme = strtolower((string)$parts['scheme']);
         if (!in_array($scheme, array('http', 'https'), true)) {
             return '';
         }
+
 
         return htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
     }
@@ -47,7 +58,7 @@ class TimelinePage_Sanitizer
 
         $images = array();
         $seen = array();
-        $rawList = preg_split('/\s*,\s*/', $imageField);
+        $rawList = preg_split('/\s*(?:,|;|\\x{FF0C}|\\x{3001}|\\x{FF1B})\s*/u', $imageField);
         foreach ($rawList as $rawUrl) {
             $rawUrl = trim($rawUrl);
             if ($rawUrl === '') {
@@ -128,7 +139,7 @@ class TimelinePage_Sanitizer
 
             $alt = trim(html_entity_decode($match[1], ENT_QUOTES, 'UTF-8'));
             $alt = htmlspecialchars($alt, ENT_QUOTES, 'UTF-8');
-            return '<img src="' . $safeUrl . '" alt="' . $alt . '" loading="lazy" referrerpolicy="no-referrer">';
+            return '<img src="' . $safeUrl . '" alt="' . $alt . '" loading="lazy">';
         }, $text);
     }
 
@@ -192,7 +203,7 @@ class TimelinePage_Sanitizer
             }
             $alt = htmlspecialchars($alt, ENT_QUOTES, 'UTF-8');
 
-            $html = '<img src="' . $safeUrl . '" alt="' . $alt . '" loading="lazy" referrerpolicy="no-referrer">';
+            $html = '<img src="' . $safeUrl . '" alt="' . $alt . '" loading="lazy">';
             return self::storeToken($tokens, $html);
         }, $text);
     }

@@ -8,12 +8,11 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
  *
  * @package TimelinePage
  * @author P3ter
- * @version 2.0.0
+ * @version 2.0.1
  * @link https://github.com/iP3ter/Typecho-TimelinePage
  */
 class TimelinePage_Plugin implements Typecho_Plugin_Interface
 {
-    private static $assetsInjected = false;
     private static $bootstrapped = false;
 
     /**
@@ -120,8 +119,9 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
             return $text;
         }
 
+        $assetsInjected = false;
         $pattern = '/\[timeline([^\]]*)\](.*?)\[\/timeline\]/is';
-        $result = preg_replace_callback($pattern, function ($matches) {
+        $result = preg_replace_callback($pattern, function ($matches) use (&$assetsInjected) {
             $attrs = self::parseShortcodeAttributes(isset($matches[1]) ? $matches[1] : '');
             $order = self::resolveOrder($attrs);
 
@@ -137,9 +137,9 @@ class TimelinePage_Plugin implements Typecho_Plugin_Interface
                 return '';
             }
 
-            if (!self::$assetsInjected) {
+            if (!$assetsInjected) {
                 $html = self::getAssetsBlock() . $html;
-                self::$assetsInjected = true;
+                $assetsInjected = true;
             }
             return $html;
         }, $text);
