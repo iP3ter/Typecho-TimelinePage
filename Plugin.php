@@ -4,7 +4,7 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
 }
 
 /**
- * Typecho 时间轴插件。
+ * Typecho 时间轴插件
  *
  * @package TimelinePage
  * @author P3ter
